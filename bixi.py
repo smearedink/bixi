@@ -18,9 +18,11 @@ import json as _json
 from xml.etree import ElementTree as _ET
 
 bixi_urls = {
-    "london": "https://tfl.gov.uk/tfl/syndication/feeds/cycle-hire/livecyclehireupdates.xml"
+    "boston": "http://feeds.thehubway.com/stations/stations.xml",
+    "london": "https://tfl.gov.uk/tfl/syndication/feeds/cycle-hire/livecyclehireupdates.xml",
     "montreal": "https://montreal.bixi.com/data/bikeStations.xml",
     "toronto": "http://feeds.bikesharetoronto.com/stations/stations.xml",
+    "washingtondc": "http://www.capitalbikeshare.com/data/stations/bikeStations.xml",
 }
 
 def _tstamp_to_datetime(tstamp):
