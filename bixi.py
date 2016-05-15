@@ -8,7 +8,7 @@ try:
     from urllib.request import urlopen as _urlopen
 except:
     from urllib2 import urlopen as _urlopen
-from datetime import datetime as _datetime
+from datetime import datetime as _datetime, timedelta as _timedelta
 from collections import Iterable as _Iterable
 import time as _time
 import numpy as _np
@@ -21,6 +21,7 @@ from xml.etree import ElementTree as _ET
 bixi_urls = {
     "boston": "http://feeds.thehubway.com/stations/stations.xml",
     "london": "https://tfl.gov.uk/tfl/syndication/feeds/cycle-hire/livecyclehireupdates.xml",
+    "minneapolis": "https://secure.niceridemn.org/data2/bikeStations.xml",
     "montreal": "https://montreal.bixi.com/data/bikeStations.xml",
     "toronto": "http://feeds.bikesharetoronto.com/stations/stations.xml",
     "washingtondc": "http://www.capitalbikeshare.com/data/stations/bikeStations.xml",
@@ -249,7 +250,10 @@ class BixiSystem(object):
                           "tree.")
                     continue
                 if verbose: print("Checking for new data...")
-                self.last_update = int(xml_tree.items()[0][1])
+                try:
+                    self.last_updated = int(xml_tree.get('lastUpdate'))
+                except:
+                    self.last_updated = int(xml_tree.get('LastUpdate'))
                 for xml_element in xml_tree:
                     station_id = int(xml_element[0].text)
                     last_comm_with_server = int(xml_element[3].text)
@@ -357,6 +361,12 @@ class BixiSystem(object):
                   (self.stations[s].station_id, _sys.exc_info()[1]))
 
         ax.plot(times, tot_nempty, c="0.3", lw=2)
+
+        curr_line = _datetime(start_time.year, start_time.month, start_time.day)
+        while curr_line < end_time:
+            ax.axvline(curr_line, color='0.5', ls='--')
+            curr_line += _timedelta(days=1)
+
         ax.set_xlim(start_time, end_time)
         ax.set_xlabel("Time")
         ax.set_ylabel("Number of empty docks across city")
