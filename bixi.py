@@ -12,6 +12,7 @@ from datetime import datetime as _datetime
 from collections import Iterable as _Iterable
 import time as _time
 import numpy as _np
+import sys as _sys
 import matplotlib.pyplot as _plt
 import matplotlib.dates as _mdates
 import json as _json
@@ -83,16 +84,13 @@ class Station(object):
         if "times" in info_dict and "nbikes" in info_dict:
             self.times = info_dict["times"]
             self.nbikes = info_dict["nbikes"]
-            # NOTE this is a temporary workaround since last_updated
-            # was added while data were being taken that I didn't want
-            # to stop
-            try:
-                self.last_updated = info_dict["last_updated"]
-            except:
-                self.last_updated = _datetime_to_tstamp(_datetime.now())
+            self.last_updated = info_dict["last_updated"]
 
     def update_from_element(self, xml_element, verbose=False):
-        most_recent_update = int(xml_element[14].text)
+        try:
+            most_recent_update = int(xml_element[14].text)
+        except:
+            return
         if len(self.times) == 0 or most_recent_update > self.times[-1]:
             self.times.append(most_recent_update)
             self.nbikes.append(int(xml_element[12].text))
@@ -100,15 +98,19 @@ class Station(object):
             if verbose:
                 print("Updated station %s" % self.name)
 
-    def get_nbikes_at_time(self, t):
+    def get_nbikes_at_time(self, t, override_endtime=None):
         """
         t is a datetime object or iterable of datetime objects
+        override_endtime is a timestamp
         """
         if (len(self.nbikes) < 1) or (self.last_updated is None):
             raise ValueError("No data available for station %d" %\
               self.station_id)
         start_t = _tstamp_to_datetime(self.times[0])
-        end_t = _tstamp_to_datetime(self.last_updated)
+        if override_endtime is None:
+            end_t = _tstamp_to_datetime(self.last_updated)
+        else:
+            end_t = _tstamp_to_datetime(override_endtime)
         if isinstance(t, _Iterable):
             if (min(t) < start_t) or (max(t) > end_t):
                 raise ValueError("Time falls outside of data range.")
@@ -168,6 +170,7 @@ class BixiSystem(object):
     """
     def __init__(self, stations={}):
         self.stations = {}
+        self.last_updated = None
 
     def __repr__(self):
         return "<BixiSystem: %d stations>" % (len(self.stations))
@@ -229,8 +232,8 @@ class BixiSystem(object):
                 if verbose: print("Iteration number %d" % iter_num)
                 if verbose: print("Querying XML data...")
                 try:
-                    # Incredibly dumb form of error testing: get data twice
-                    # and make sure they're the same
+                    # NOTE: Incredibly dumb form of error testing: get data
+                    # twice and make sure they're the same
                     with _urlopen(data_url) as f:
                         parsed_xml = _ET.parse(f)
                         xml_tree = parsed_xml.getroot()
@@ -246,6 +249,7 @@ class BixiSystem(object):
                           "tree.")
                     continue
                 if verbose: print("Checking for new data...")
+                self.last_update = int(xml_tree.items()[0][1])
                 for xml_element in xml_tree:
                     station_id = int(xml_element[0].text)
                     last_comm_with_server = int(xml_element[3].text)
@@ -317,7 +321,7 @@ class BixiSystem(object):
         fig_ts.canvas.mpl_connect('button_press_event', click_on_axes)
 
     def plot_total_empty_docks(self, start_time, end_time, npts,\
-      return_vals=False):
+      return_vals=False, use_system_last_updated=True):
         """
         start_time and end_time should be datetime objects
         """
@@ -335,21 +339,25 @@ class BixiSystem(object):
             times.append(curr)
             curr += dt
 
+        if use_system_last_updated:
+            override_endtime = self.last_updated
+        else:
+            override_endtime = None
+
         tot_nempty = _np.zeros(len(times), dtype=int)
         for s in self.stations:
             # NOTE this could be better
             try:
-                nbikes = _np.array(self.stations[s].get_nbikes_at_time(times))
+                nbikes = _np.array(self.stations[s].get_nbikes_at_time(times,\
+                  override_endtime))
                 tot_nempty += self.stations[s].ndocks - nbikes
-#                n += self.stations[s].ndocks -\
-#                  self.stations[s].get_nbikes_at_time(curr)
             except:
-                print("Getting total nbikes failed for station %d" %\
-                  self.stations[s].station_id)
+                print("Getting total nbikes failed for station",\
+                  "%d with error:\n  %s" %\
+                  (self.stations[s].station_id, _sys.exc_info()[1]))
 
         ax.plot(times, tot_nempty, c="0.3", lw=2)
         ax.set_xlim(start_time, end_time)
-        #ax.set_ylim(ymin=0)
         ax.set_xlabel("Time")
         ax.set_ylabel("Number of empty docks across city")
 
