@@ -18,6 +18,9 @@ import matplotlib.dates as _mdates
 import json as _json
 from xml.etree import ElementTree as _ET
 
+# Not all of these are currently working as far as I can tell, since there are
+# very slight differences in the XML format. I think I should make a point of
+# reading the XML based on tag labels rather than indices.
 bixi_urls = {
     "boston": "http://feeds.thehubway.com/stations/stations.xml",
     "london": "https://tfl.gov.uk/tfl/syndication/feeds/cycle-hire/livecyclehireupdates.xml",
@@ -126,12 +129,44 @@ class Station(object):
                 return self.nbikes[_np.searchsorted(self.times,\
                   _datetime_to_tstamp(t))-1]
 
-    def plot(self, ax=None, start_time=None, end_time=None):
+    def nbikes_timeseries(self, tstamps):
+        nbikes_first = self.nbikes[0]
+        nbikes_diff = _np.diff(self.nbikes)
+        
+        nbikes_ax = _np.zeros_like(tstamps) + nbikes_first
+        for ii, ax_ii in enumerate(_np.searchsorted(tstamps, self.times[1:])):
+            nbikes_ax[ax_ii:] += nbikes_diff[ii]
+
+        return nbikes_ax
+
+    def activity_histogram(self, tstamp_bin_edges, activity_type='both'):
+        """
+        activity_type can be 'both', 'diff', 'increase', or 'decrease'
+        """ 
+        hist = _np.zeros(len(tstamp_bin_edges)-1, dtype=int)
+        hist_ii = 0
+        nbikes_diff = _np.diff(self.nbikes)
+        for ii,t in enumerate(self.times[1:]):
+            if t >= tstamp_bin_edges[0] and t <= tstamp_bin_edges[-1]:
+                hist_ii += _np.searchsorted(tstamp_bin_edges[1:][hist_ii:], t)
+                if activity_type.lower()=='increase' and nbikes_diff[ii] > 0:
+                    hist[hist_ii] += nbikes_diff[ii]
+                elif activity_type.lower()=='decrease' and nbikes_diff[ii] < 0:
+                    hist[hist_ii] += -nbikes_diff[ii]
+                elif activity_type.lower()=='both':
+                    hist[hist_ii] += _np.abs(nbikes_diff[ii])
+                elif activity_type.lower()=='diff':
+                    hist[hist_ii] += nbikes_diff[ii]
+        return hist
+
+    def plot(self, ax=None, start_time=None, end_time=None, override_end=None):
         """
         start_time and end_time are datetime objects. If None, the earliest
         or latest timestamp for the station is used.
-        """
 
+        override_end is a timestamp, adds extra point to end of timeseries
+        at given time with same nbikes as previous time
+        """
         if len(self.times) < 1 or self.last_updated is None:
             print("No plottable data for station %d" % self.station_id)
             if ax is not None:
@@ -143,7 +178,10 @@ class Station(object):
         if end_time is None: t2 = self.last_updated
         else: t2 = _datetime_to_tstamp(end_time)
 
-        plot_times = list(self.times) + [self.last_updated]
+        if override_end is not None:
+            plot_times = list(self.times) + [override_end]
+        else:
+            plot_times = list(self.times) + [self.last_updated]
         plot_nbikes = list(self.nbikes) + [self.nbikes[-1]]
 
         tscale = 1000 * 60
@@ -296,7 +334,7 @@ class BixiSystem(object):
                 ax = fig_ts.add_subplot(nrow, ncol, ii+1)
                 sid = station_ids[ii]
                 self.stations[sid].plot(ax=ax, start_time=start_time,\
-                  end_time=end_time)
+                  end_time=end_time, override_end=self.last_updated)
                 ax.set_xticks([])
                 ax.set_yticks([])
                 ax.set_label("%s (%d docks)" % (self.stations[sid].name,\
@@ -324,42 +362,67 @@ class BixiSystem(object):
 
         fig_ts.canvas.mpl_connect('button_press_event', click_on_axes)
 
-    def plot_total_empty_docks(self, start_time, end_time, npts,\
-      return_vals=False, use_system_last_updated=True):
-        """
-        start_time and end_time should be datetime objects
-        """
-        timefmt = _mdates.DateFormatter('%H:%M')
+    def plot_total_activity(self, start_time, end_time, dt, activity_type='both', return_vals=False):
+        start_ms = _datetime_to_tstamp(start_time)
+        end_ms = _datetime_to_tstamp(end_time)
+        dt_ms = dt * 1000
+        time_ax = _np.arange(start_ms, end_ms, dt_ms)
         
+        timefmt = _mdates.DateFormatter('%H:%M')
         fig = _plt.figure()
         ax = fig.add_subplot(111)
         ax.xaxis_date()
         ax.xaxis.set_major_formatter(timefmt)
 
-        dt = (end_time-start_time)/npts
-        times = []
-        curr = start_time
-        while curr < end_time:
-            times.append(curr)
-            curr += dt
-
-        if use_system_last_updated:
-            override_endtime = self.last_updated
-        else:
-            override_endtime = None
-
-        tot_nempty = _np.zeros(len(times), dtype=int)
+        tot_hist = _np.zeros_like(time_ax[:-1])
         for s in self.stations:
-            # NOTE this could be better
             try:
-                nbikes = _np.array(self.stations[s].get_nbikes_at_time(times,\
-                  override_endtime))
-                tot_nempty += self.stations[s].ndocks - nbikes
+                tot_hist += self.stations[s].activity_histogram(time_ax, activity_type=activity_type)
+            except:
+                print("Getting activity failed for station",\
+                  "%d with error:\n  %s" %\
+                  (self.stations[s].station_id, _sys.exc_info()[1]))
+
+        times = [_tstamp_to_datetime(t) for t in time_ax[:-1]]
+        ax.plot(times, tot_hist, c="0.3", lw=2)
+
+        curr_line = _datetime(start_time.year, start_time.month, start_time.day)
+        while curr_line < end_time:
+            ax.axvline(curr_line, color='0.5', ls='--')
+            curr_line += _timedelta(days=1)
+
+        ax.set_xlim(start_time, end_time)
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Total activity across city")
+
+        if return_vals:
+            return times, time_ax, tot_hist
+
+
+
+    def plot_total_empty_docks(self, start_time, end_time, dt, return_vals=False):
+        start_ms = _datetime_to_tstamp(start_time)
+        end_ms = _datetime_to_tstamp(end_time)
+        dt_ms = dt * 1000
+        time_ax = _np.arange(start_ms, end_ms, dt_ms)
+        
+        timefmt = _mdates.DateFormatter('%H:%M')
+        fig = _plt.figure()
+        ax = fig.add_subplot(111)
+        ax.xaxis_date()
+        ax.xaxis.set_major_formatter(timefmt)
+
+        tot_nempty = _np.zeros_like(time_ax)
+        for s in self.stations:
+            try:
+                tot_nempty += self.stations[s].ndocks -\
+                  self.stations[s].nbikes_timeseries(time_ax)
             except:
                 print("Getting total nbikes failed for station",\
                   "%d with error:\n  %s" %\
                   (self.stations[s].station_id, _sys.exc_info()[1]))
 
+        times = [_tstamp_to_datetime(t) for t in time_ax]
         ax.plot(times, tot_nempty, c="0.3", lw=2)
 
         curr_line = _datetime(start_time.year, start_time.month, start_time.day)
@@ -372,4 +435,54 @@ class BixiSystem(object):
         ax.set_ylabel("Number of empty docks across city")
 
         if return_vals:
-            return times, tot_nempty
+            return times, time_ax, tot_nempty
+
+#    def plot_total_empty_docks(self, start_time, end_time, npts,\
+#      return_vals=False, use_system_last_updated=True):
+#        """
+#        start_time and end_time should be datetime objects
+#        """
+#        timefmt = _mdates.DateFormatter('%H:%M')
+#        
+#        fig = _plt.figure()
+#        ax = fig.add_subplot(111)
+#        ax.xaxis_date()
+#        ax.xaxis.set_major_formatter(timefmt)
+#
+#        dt = (end_time-start_time)/npts
+#        times = []
+#        curr = start_time
+#        while curr < end_time:
+#            times.append(curr)
+#            curr += dt
+#
+#        if use_system_last_updated:
+#            override_endtime = self.last_updated
+#        else:
+#            override_endtime = None
+#
+#        tot_nempty = _np.zeros(len(times), dtype=int)
+#        for s in self.stations:
+#            # NOTE this could be better
+#            try:
+#                nbikes = _np.array(self.stations[s].get_nbikes_at_time(times,\
+#                  override_endtime))
+#                tot_nempty += self.stations[s].ndocks - nbikes
+#            except:
+#                print("Getting total nbikes failed for station",\
+#                  "%d with error:\n  %s" %\
+#                  (self.stations[s].station_id, _sys.exc_info()[1]))
+#
+#        ax.plot(times, tot_nempty, c="0.3", lw=2)
+#
+#        curr_line = _datetime(start_time.year, start_time.month, start_time.day)
+#        while curr_line < end_time:
+#            ax.axvline(curr_line, color='0.5', ls='--')
+#            curr_line += _timedelta(days=1)
+#
+#        ax.set_xlim(start_time, end_time)
+#        ax.set_xlabel("Time")
+#        ax.set_ylabel("Number of empty docks across city")
+#
+#        if return_vals:
+#            return times, tot_nempty
