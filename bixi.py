@@ -22,31 +22,16 @@ from sqlalchemy.ext.declarative import declarative_base as _declarative_base
 from sqlalchemy.orm import relationship as _relationship
 import sqlalchemy as _sql
 
-Base = _declarative_base()
-
-# Not all of these are currently working as far as I can tell, since there are
-# very slight differences in the XML format. I think I should make a point of
-# reading the XML based on tag labels rather than indices.
-bixi_urls = {
-    "boston": "http://feeds.thehubway.com/stations/stations.xml",
-    "london": "https://tfl.gov.uk/tfl/syndication/feeds/cycle-hire/livecyclehireupdates.xml",
-    "minneapolis": "https://secure.niceridemn.org/data2/bikeStations.xml",
-    "montreal": "https://montreal.bixi.com/data/bikeStations.xml",
-    "toronto": "http://feeds.bikesharetoronto.com/stations/stations.xml",
-    "washingtondc": "http://www.capitalbikeshare.com/data/stations/bikeStations.xml",
-}
+_Base = _declarative_base()
 
 def _tstamp_to_datetime(tstamp):
-    return _datetime.fromtimestamp(tstamp/1000)
+    return _datetime.fromtimestamp(float(tstamp)/1000)
 
-def _datetime_to_tstamp(datetime_val):
-    # avoiding datetime.timestamp for python2 compatability
-    return int(1000*(_time.mktime(datetime_val.timetuple()) +\
-      datetime_val.microsecond/1e6))
-
-class Station(Base):
+class Station(_Base):
     """
-    A class containing data and methods for an individual bike station.
+    Information about a particular bike station in a Bixi system, including
+    its location, the total number of docks, its name, the last time it was
+    updated, and the number of bikes over time if data have been collected.
     """
     __tablename__ = 'stations'
 
@@ -64,31 +49,21 @@ class Station(Base):
         return "<Station %d: %s>" % (self.id, self.name)
 
     @classmethod
-    def from_element(cls, xml_element):
+    def from_dict(cls, station_dict):
         new_station = cls()
-        new_station.set_info_from_element(xml_element)
+        new_station.set_info_from_dict(station_dict)
+        new_station.update_from_dict(station_dict)
         return new_station
 
-    @classmethod
-    def from_dict(cls, info_dict):
-        new_station = cls()
-        new_station.set_info_from_dict(info_dict)
-        new_station.set_data_from_dict(info_dict)
-        return new_station
+    def set_info_from_dict(self, station_dict):
+        self.id = station_dict["id"]
+        self.name = station_dict["name"]
+        self.lat = station_dict["lat"]
+        self.lon = station_dict["long"]
+        self.ndocks = station_dict["nbBikes"] + station_dict["nbEmptyDocks"]
 
-    def set_info_from_element(self, xml_element):
-        self.station_id = int(xml_element[0].text)
-        self.name = xml_element[1].text
-        self.lat = float(xml_element[4].text)
-        self.lon = float(xml_element[5].text)
-        self.ndocks = int(xml_element[12].text) + int(xml_element[13].text)
-
-    def set_info_from_dict(self, info_dict):
-        self.station_id = info_dict["station_id"]
-        self.name = info_dict["name"]
-        self.lat = info_dict["lat"]
-        self.lon = info_dict["lon"]
-        self.ndocks = info_dict["ndocks"]
+    def update_from_dict(self, station_dict):
+        pass
 
 #    def set_data_from_dict(self, info_dict):
 #        if "times" in info_dict and "nbikes" in info_dict:
@@ -108,7 +83,10 @@ class Station(Base):
 #            if verbose:
 #                print("Updated station %s" % self.name)
 
-class BikeCount(Base):
+class BikeCount(_Base):
+    """
+    The number of bikes in each station over time.
+    """
     __tablename__ = 'bikecounts'
 
     time = _sql.Column(_sql.Time, primary_key=True)
@@ -118,6 +96,79 @@ class BikeCount(Base):
     def __repr__(self):
         return "<BikeCount: %d bikes at station id %d>" %\
           (self.nbikes, self.station.id)
+
+
+
+bixi_urls = {
+    "boston": "http://feeds.thehubway.com/stations/stations.xml",
+    "london": "https://tfl.gov.uk/tfl/syndication/feeds/cycle-hire/livecyclehireupdates.xml",
+    "minneapolis": "https://secure.niceridemn.org/data2/bikeStations.xml",
+    "montreal": "https://montreal.bixi.com/data/bikeStations.xml",
+    "toronto": "http://feeds.bikesharetoronto.com/stations/stations.xml",
+    "washingtondc": "http://www.capitalbikeshare.com/data/stations/bikeStations.xml",
+}
+
+# These are the tag labels we'll be grabbing from the XML and the types
+# we wish to convert them to
+tags = {
+    'id': int,
+    'name': str,
+    'lat': float,
+    'long': float,
+    'nbBikes': int,
+    'nbEmptyDocks': int,
+    'lastUpdateTime': _tstamp_to_datetime,
+}
+
+# Annoyingly, in some systems, some tags have different names, so we check
+# those if necessary
+alternate_tag_names = {
+    'lastUpdateTime': ['latestUpdateTime'],
+}
+
+def query_bixi_url(url):
+    f = _urlopen(url)
+    parsed_xml = _ET.parse(f)
+    f.close()
+
+    last_updated = parsed_xml.find('.').get('LastUpdate') or \
+                   parsed_xml.find('.').get('LastUpdated') or \
+                   parsed_xml.find('.').get('lastUpdate') or \
+                   parsed_xml.find('.').get('lastUpdated')
+    assert last_updated is not None
+
+    stations = []
+    for station in parsed_xml.findall('./station'):
+        installed = station.find('./installed').text
+        if installed.lower()[0] == "f":
+            continue
+        info = {}
+        for tag in tags:
+            element = station.find('./' + tag)
+            if element is None:
+                if tag in alternate_tag_names:
+                    for alt_tag in alternate_tag_names[tag]:
+                        element = station.find('./' + alt_tag)
+                        if element is not None:
+                            break
+            if element is None:
+                if tag == 'lastUpdateTime':
+                    info[tag] = tags[tag](last_updated)
+                else:
+                    info[tag] = None
+            else:
+                info[tag] = tags[tag](element.text)
+        stations.append(info)
+
+    return stations
+
+
+
+
+
+
+
+
 
 class BixiSystem(object):
     """
@@ -354,52 +405,3 @@ class BixiSystem(object):
         if return_vals:
             return times, time_ax, tot_nempty
 
-#    def plot_total_empty_docks(self, start_time, end_time, npts,\
-#      return_vals=False, use_system_last_updated=True):
-#        """
-#        start_time and end_time should be datetime objects
-#        """
-#        timefmt = _mdates.DateFormatter('%H:%M')
-#        
-#        fig = _plt.figure()
-#        ax = fig.add_subplot(111)
-#        ax.xaxis_date()
-#        ax.xaxis.set_major_formatter(timefmt)
-#
-#        dt = (end_time-start_time)/npts
-#        times = []
-#        curr = start_time
-#        while curr < end_time:
-#            times.append(curr)
-#            curr += dt
-#
-#        if use_system_last_updated:
-#            override_endtime = self.last_updated
-#        else:
-#            override_endtime = None
-#
-#        tot_nempty = _np.zeros(len(times), dtype=int)
-#        for s in self.stations:
-#            # NOTE this could be better
-#            try:
-#                nbikes = _np.array(self.stations[s].get_nbikes_at_time(times,\
-#                  override_endtime))
-#                tot_nempty += self.stations[s].ndocks - nbikes
-#            except:
-#                print("Getting total nbikes failed for station",\
-#                  "%d with error:\n  %s" %\
-#                  (self.stations[s].station_id, _sys.exc_info()[1]))
-#
-#        ax.plot(times, tot_nempty, c="0.3", lw=2)
-#
-#        curr_line = _datetime(start_time.year, start_time.month, start_time.day)
-#        while curr_line < end_time:
-#            ax.axvline(curr_line, color='0.5', ls='--')
-#            curr_line += _timedelta(days=1)
-#
-#        ax.set_xlim(start_time, end_time)
-#        ax.set_xlabel("Time")
-#        ax.set_ylabel("Number of empty docks across city")
-#
-#        if return_vals:
-#            return times, tot_nempty
