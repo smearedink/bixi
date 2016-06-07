@@ -18,6 +18,12 @@ import matplotlib.dates as _mdates
 import json as _json
 from xml.etree import ElementTree as _ET
 
+from sqlalchemy.ext.declarative import declarative_base as _declarative_base
+from sqlalchemy.orm import relationship as _relationship
+import sqlalchemy as _sql
+
+Base = _declarative_base()
+
 # Not all of these are currently working as far as I can tell, since there are
 # very slight differences in the XML format. I think I should make a point of
 # reading the XML based on tag labels rather than indices.
@@ -38,24 +44,24 @@ def _datetime_to_tstamp(datetime_val):
     return int(1000*(_time.mktime(datetime_val.timetuple()) +\
       datetime_val.microsecond/1e6))
 
-class Station(object):
+class Station(Base):
     """
     A class containing data and methods for an individual bike station.
     """
-    def __init__(self, station_id=0, name="", lat=0, lon=0, ndocks=0):
-        self.station_id = station_id
-        self.name = name
-        self.lat = lat
-        self.lon = lon
-        self.ndocks = ndocks
-        
-        self.times = []
-        self.nbikes = []
-        self.last_updated = None
+    __tablename__ = 'stations'
+
+    id = _sql.Column(_sql.Integer, primary_key=True)
+    name = _sql.Column(_sql.String)
+    lat = _sql.Column(_sql.Float)
+    lon = _sql.Column(_sql.Float)
+    ndocks = _sql.Column(_sql.Integer)
+    last_updated = _sql.Column(_sql.Time)
+
+    bike_count = _relationship(
+        "BikeCount", order_by=BikeCount.time, back_populates="station")
 
     def __repr__(self):
-        return "<Station %d: %d data points>" % (self.station_id,\
-          len(self.times))
+        return "<Station %d: %s>" % (self.id, self.name)
 
     @classmethod
     def from_element(cls, xml_element):
@@ -84,123 +90,34 @@ class Station(object):
         self.lon = info_dict["lon"]
         self.ndocks = info_dict["ndocks"]
 
-    def set_data_from_dict(self, info_dict):
-        if "times" in info_dict and "nbikes" in info_dict:
-            self.times = info_dict["times"]
-            self.nbikes = info_dict["nbikes"]
-            self.last_updated = info_dict["last_updated"]
+#    def set_data_from_dict(self, info_dict):
+#        if "times" in info_dict and "nbikes" in info_dict:
+#            self.times = info_dict["times"]
+#            self.nbikes = info_dict["nbikes"]
+#            self.last_updated = info_dict["last_updated"]
 
-    def update_from_element(self, xml_element, verbose=False):
-        try:
-            most_recent_update = int(xml_element[14].text)
-        except:
-            return
-        if len(self.times) == 0 or most_recent_update > self.times[-1]:
-            self.times.append(most_recent_update)
-            self.nbikes.append(int(xml_element[12].text))
-            self.last_updated = int(xml_element[3].text)
-            if verbose:
-                print("Updated station %s" % self.name)
+#    def update_from_element(self, xml_element, verbose=False):
+#        try:
+#            most_recent_update = int(xml_element[14].text)
+#        except:
+#            return
+#        if len(self.times) == 0 or most_recent_update > self.times[-1]:
+#            self.times.append(most_recent_update)
+#            self.nbikes.append(int(xml_element[12].text))
+#            self.last_updated = int(xml_element[3].text)
+#            if verbose:
+#                print("Updated station %s" % self.name)
 
-    def get_nbikes_at_time(self, t, override_endtime=None):
-        """
-        t is a datetime object or iterable of datetime objects
-        override_endtime is a timestamp
-        """
-        if (len(self.nbikes) < 1) or (self.last_updated is None):
-            raise ValueError("No data available for station %d" %\
-              self.station_id)
-        start_t = _tstamp_to_datetime(self.times[0])
-        if override_endtime is None:
-            end_t = _tstamp_to_datetime(self.last_updated)
-        else:
-            end_t = _tstamp_to_datetime(override_endtime)
-        if isinstance(t, _Iterable):
-            if (min(t) < start_t) or (max(t) > end_t):
-                raise ValueError("Time falls outside of data range.")
-            else:
-                inds = _np.searchsorted(self.times,\
-                  [_datetime_to_tstamp(ti) for ti in t])-1
-                return [self.nbikes[i] for i in inds]
-        else:
-            if (t < start_t) or (t > end_t):
-                raise ValueError("Time falls outside of data range.")
-            else:
-                return self.nbikes[_np.searchsorted(self.times,\
-                  _datetime_to_tstamp(t))-1]
+class BikeCount(Base):
+    __tablename__ = 'bikecounts'
 
-    def nbikes_timeseries(self, tstamps):
-        nbikes_first = self.nbikes[0]
-        nbikes_diff = _np.diff(self.nbikes)
-        
-        nbikes_ax = _np.zeros_like(tstamps) + nbikes_first
-        for ii, ax_ii in enumerate(_np.searchsorted(tstamps, self.times[1:])):
-            nbikes_ax[ax_ii:] += nbikes_diff[ii]
+    time = _sql.Column(_sql.Time, primary_key=True)
+    nbikes = _sql.Column(_sql.Integer)
+    station = _relationship("Station", back_populates="bike_count")
 
-        return nbikes_ax
-
-    def activity_histogram(self, tstamp_bin_edges, activity_type='both'):
-        """
-        activity_type can be 'both', 'diff', 'increase', or 'decrease'
-        """ 
-        hist = _np.zeros(len(tstamp_bin_edges)-1, dtype=int)
-        hist_ii = 0
-        nbikes_diff = _np.diff(self.nbikes)
-        for ii,t in enumerate(self.times[1:]):
-            if t >= tstamp_bin_edges[0] and t <= tstamp_bin_edges[-1]:
-                hist_ii += _np.searchsorted(tstamp_bin_edges[1:][hist_ii:], t)
-                if activity_type.lower()=='increase' and nbikes_diff[ii] > 0:
-                    hist[hist_ii] += nbikes_diff[ii]
-                elif activity_type.lower()=='decrease' and nbikes_diff[ii] < 0:
-                    hist[hist_ii] += -nbikes_diff[ii]
-                elif activity_type.lower()=='both':
-                    hist[hist_ii] += _np.abs(nbikes_diff[ii])
-                elif activity_type.lower()=='diff':
-                    hist[hist_ii] += nbikes_diff[ii]
-        return hist
-
-    def plot(self, ax=None, start_time=None, end_time=None, override_end=None):
-        """
-        start_time and end_time are datetime objects. If None, the earliest
-        or latest timestamp for the station is used.
-
-        override_end is a timestamp, adds extra point to end of timeseries
-        at given time with same nbikes as previous time
-        """
-        if len(self.times) < 1 or self.last_updated is None:
-            print("No plottable data for station %d" % self.station_id)
-            if ax is not None:
-                ax.set_axis_bgcolor('black')
-            return
-        
-        if start_time is None: t1 = self.times[0]
-        else: t1 = _datetime_to_tstamp(start_time)
-        if end_time is None: t2 = self.last_updated
-        else: t2 = _datetime_to_tstamp(end_time)
-
-        if override_end is not None:
-            plot_times = list(self.times) + [override_end]
-        else:
-            plot_times = list(self.times) + [self.last_updated]
-        plot_nbikes = list(self.nbikes) + [self.nbikes[-1]]
-
-        tscale = 1000 * 60
-
-        if ax is None:
-            fig = _plt.figure(figsize=(12,6))
-            ax = fig.add_subplot(111)
-            ax.set_xlabel("Time")
-            ax.set_ylabel("Number of bikes")
-            ax.set_title(self.name)
-
-        ax.set_axis_bgcolor('black')
-        ax.fill_between([plot_times[0]/tscale, plot_times[-1]/tscale],\
-          [self.ndocks]*2, lw=0, color='0.3')
-        ax.fill_between(_np.repeat(plot_times, 2)[1:]/tscale,\
-          _np.repeat(plot_nbikes ,2)[:-1], lw=0, color='0.6')
-        ax.set_xlim(t1/tscale, t2/tscale)
-        ax.set_ylim(0, self.ndocks)
-        ax.grid(axis="y", color="white")
+    def __repr__(self):
+        return "<BikeCount: %d bikes at station id %d>" %\
+          (self.nbikes, self.station.id)
 
 class BixiSystem(object):
     """
