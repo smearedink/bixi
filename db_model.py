@@ -22,12 +22,12 @@ from sqlalchemy.ext.declarative import declarative_base as _declarative_base
 from sqlalchemy.orm import relationship as _relationship
 import sqlalchemy as _sql
 
-_Base = _declarative_base()
+Base = _declarative_base()
 
 def _tstamp_to_datetime(tstamp):
     return _datetime.fromtimestamp(float(tstamp)/1000)
 
-class Station(_Base):
+class Station(Base):
     """
     Information about a particular bike station in a Bixi system, including
     its location, the total number of docks, its name, the last time it was
@@ -40,10 +40,10 @@ class Station(_Base):
     lat = _sql.Column(_sql.Float)
     lon = _sql.Column(_sql.Float)
     ndocks = _sql.Column(_sql.Integer)
-    last_updated = _sql.Column(_sql.Time)
+    last_updated = _sql.Column(_sql.DateTime)
 
     bike_count = _relationship(
-        "BikeCount", order_by=BikeCount.time, back_populates="station")
+        "BikeCount", order_by="BikeCount.time", back_populates="station")
 
     def __repr__(self):
         return "<Station %d: %s>" % (self.id, self.name)
@@ -62,35 +62,24 @@ class Station(_Base):
         self.lon = station_dict["long"]
         self.ndocks = station_dict["nbBikes"] + station_dict["nbEmptyDocks"]
 
-    def update_from_dict(self, station_dict):
-        pass
+    def update_from_dict(self, station_dict, verbose=False):
+        count = BikeCount(time=station_dict["lastUpdateTime"],\
+          nbikes=station_dict["nbBikes"])
+        if (count.time, count.nbikes) not in zip([b.time for b in self.bike_count], [b.nbikes for b in self.bike_count]):
+            self.bike_count.append(count)
+            if verbose:
+                print("Updated station %s" % self.name)
 
-#    def set_data_from_dict(self, info_dict):
-#        if "times" in info_dict and "nbikes" in info_dict:
-#            self.times = info_dict["times"]
-#            self.nbikes = info_dict["nbikes"]
-#            self.last_updated = info_dict["last_updated"]
-
-#    def update_from_element(self, xml_element, verbose=False):
-#        try:
-#            most_recent_update = int(xml_element[14].text)
-#        except:
-#            return
-#        if len(self.times) == 0 or most_recent_update > self.times[-1]:
-#            self.times.append(most_recent_update)
-#            self.nbikes.append(int(xml_element[12].text))
-#            self.last_updated = int(xml_element[3].text)
-#            if verbose:
-#                print("Updated station %s" % self.name)
-
-class BikeCount(_Base):
+class BikeCount(Base):
     """
     The number of bikes in each station over time.
     """
     __tablename__ = 'bikecounts'
 
-    time = _sql.Column(_sql.Time, primary_key=True)
+    id = _sql.Column(_sql.Integer, primary_key=True)
+    time = _sql.Column(_sql.DateTime)
     nbikes = _sql.Column(_sql.Integer)
+    station_id = _sql.Column(_sql.Integer, _sql.ForeignKey("stations.id"))
     station = _relationship("Station", back_populates="bike_count")
 
     def __repr__(self):
@@ -137,7 +126,7 @@ def query_bixi_url(url):
                    parsed_xml.find('.').get('lastUpdated')
     assert last_updated is not None
 
-    stations = []
+    stations = {}
     for station in parsed_xml.findall('./station'):
         installed = station.find('./installed').text
         if installed.lower()[0] == "f":
@@ -158,7 +147,7 @@ def query_bixi_url(url):
                     info[tag] = None
             else:
                 info[tag] = tags[tag](element.text)
-        stations.append(info)
+        stations[info["id"]] = info
 
     return stations
 
