@@ -10,8 +10,8 @@ from sqlalchemy.ext.declarative import declarative_base as _declarative_base
 from sqlalchemy.orm import relationship as _relationship
 import sqlalchemy as _sql
 
-from utils import datetime_to_tstamp as _datetime_to_tstamp
-from utils import tstamp_to_datetime as _tstamp_to_datetime
+from .utils import datetime_to_tstamp as _datetime_to_tstamp
+from .utils import tstamp_to_datetime as _tstamp_to_datetime
 
 Base = _declarative_base()
 

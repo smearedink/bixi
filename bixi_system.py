@@ -18,9 +18,9 @@ from xml.etree import ElementTree as _ET
 from sqlalchemy import create_engine as _create_engine
 from sqlalchemy.orm import sessionmaker as _sessionmaker
 
-import db_model
-from utils import datetime_to_tstamp as _datetime_to_tstamp
-from utils import tstamp_to_datetime as _tstamp_to_datetime
+from . import db_model
+from .utils import datetime_to_tstamp as _datetime_to_tstamp
+from .utils import tstamp_to_datetime as _tstamp_to_datetime
 
 bixi_urls = {
     "boston": "http://feeds.thehubway.com/stations/stations.xml",

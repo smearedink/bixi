@@ -4,6 +4,6 @@ from __future__ import print_function as _print_function
 from __future__ import unicode_literals as _unicode_literals
 from __future__ import division as _division
 
-from bixi_system import tags, query_bixi_url, bixi_urls, Bixi
-import db_model
-import utils
+from .bixi_system import tags, query_bixi_url, bixi_urls, Bixi
+from . import db_model
+from . import utils
