@@ -68,7 +68,10 @@ class Station(Base):
         b_times = [b.time for b in self.bike_count]
         b_nbikes = [b.nbikes for b in self.bike_count]
         if count.time not in b_times:
-            last_nbikes = b_nbikes[_np.argsort(b_times)[-1]]
+            if len(b_times):
+                last_nbikes = b_nbikes[_np.argsort(b_times)[-1]]
+            else:
+                last_nbikes = -1
             if count.nbikes != last_nbikes:
                 self.bike_count.append(count)
                 if verbose:
