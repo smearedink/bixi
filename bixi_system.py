@@ -35,7 +35,7 @@ bixi_urls = {
 # we wish to convert them to
 tags = {
     'id': int,
-    'name': str,
+    'name': lambda x:x,
     'lat': float,
     'long': float,
     'nbBikes': int,
