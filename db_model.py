@@ -65,10 +65,14 @@ class Station(Base):
     def update_from_dict(self, station_dict, verbose=False):
         count = BikeCount(time=station_dict["lastUpdateTime"],\
           nbikes=station_dict["nbBikes"])
-        if (count.time, count.nbikes) not in zip([b.time for b in self.bike_count], [b.nbikes for b in self.bike_count]):
-            self.bike_count.append(count)
-            if verbose:
-                print("Updated station %s" % self.name)
+        b_times = [b.time for b in self.bike_count]
+        b_nbikes = [b.nbikes for b in self.bike_count]
+        if count.time not in b_times:
+            last_nbikes = b_nbikes[_np.argsort(b_times)[-1]]
+            if count.nbikes != last_nbikes:
+                self.bike_count.append(count)
+                if verbose:
+                    print("Updated station %s" % self.name)
 
 class BikeCount(Base):
     """
