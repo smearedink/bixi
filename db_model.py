@@ -28,7 +28,6 @@ class Station(Base):
     lat = _sql.Column(_sql.Float)
     lon = _sql.Column(_sql.Float)
     ndocks = _sql.Column(_sql.Integer)
-    last_updated = _sql.Column(_sql.DateTime)
 
     bike_count = _relationship(
         "BikeCount", order_by="BikeCount.time", back_populates="station")
